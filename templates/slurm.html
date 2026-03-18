@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% set active = 'slurm' %}
+{% block title %}SLURM{% endblock %}
+
+{% block extra_style %}
+.page { display:flex; flex-direction:column; flex:1; overflow:hidden; }
+
+.top-bar {
+  display:flex; align-items:center; gap:10px;
+  padding:9px 14px; border-bottom:1px solid var(--border);
+  background:var(--surface); flex-shrink:0;
+}
+.bar-title { flex:1; font-size:12px; color:var(--muted); }
+
+.content { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+
+.card { background:var(--surface); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.card-head {
+  display:flex; align-items:center; gap:10px;
+  padding:9px 14px; border-bottom:1px solid var(--border);
+  font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em;
+}
+.card-head .badge { margin-left:auto; font-size:11px; color:var(--accent); letter-spacing:0; }
+.card-body { padding:14px; }
+
+/* Table */
+.tbl-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:12px; }
+th { text-align:left; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; font-weight:400; padding:0 12px 8px 0; white-space:nowrap; }
+td { padding:7px 12px 7px 0; border-top:1px solid var(--border); vertical-align:middle; }
+.empty-row { color:var(--muted); text-align:center; padding:24px !important; }
+
+/* Log */
+.log {
+  margin-top:10px; background:var(--bg); border:1px solid var(--border);
+  border-radius:4px; padding:10px 12px; font-size:11px; line-height:1.6;
+  color:var(--green); white-space:pre-wrap; min-height:38px; display:none;
+}
+.log.err { color:var(--red); }
+
+/* Row of inputs + buttons */
+.input-row { display:flex; gap:8px; }
+.input-row input { flex:1; }
+
+/* Refresh animation */
+.spinning { animation:spin .6s linear infinite; display:inline-block; }
+@keyframes spin { to{transform:rotate(360deg)} }
+{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="top-bar">
+    <span class="bar-title">SLURM Queue — <strong style="color:var(--text)">{{ username }}</strong></span>
+    <button class="btn btn-sm" id="refreshBtn" onclick="loadQueue()">↻ Refresh</button>
+  </div>
+
+  <div class="content">
+
+    <!-- Queue table -->
+    <div class="card">
+      <div class="card-head">
+        Job Queue
+        <span class="badge" id="badge">—</span>
+      </div>
+      <div class="card-body">
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Name</th><th>State</th><th>Time</th>
+                <th>Limit</th><th>Nodes</th><th>Partition</th><th>Reason</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="queueBody">
+              <tr><td class="empty-row" colspan="9">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Submit job -->
+    <div class="card">
+      <div class="card-head">Submit Job</div>
+      <div class="card-body">
+        <div class="input-row">
+          <input type="text" id="scriptPath" placeholder="/home/mario/jobs/train.slurm">
+          <button class="btn btn-primary btn-sm" onclick="submitJob()">sbatch →</button>
+        </div>
+        <div class="log" id="submitLog"></div>
+      </div>
+    </div>
+
+    <!-- Quick command -->
+    <div class="card">
+      <div class="card-head">Run Command</div>
+      <div class="card-body">
+        <div class="input-row">
+          <input type="text" id="cmdInput" placeholder="sinfo, sacct -j 12345, module list …">
+          <button class="btn btn-sm" onclick="runCmd()">Run →</button>
+        </div>
+        <div class="log" id="cmdLog"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function stateClass(s) {
+  if (s === 'RUNNING')                    return 'tag-running';
+  if (s === 'PENDING')                    return 'tag-pending';
+  if (['FAILED','CANCELLED','TIMEOUT'].includes(s)) return 'tag-failed';
+  return 'tag-other';
+}
+
+async function loadQueue() {
+  const btn = document.getElementById('refreshBtn');
+  btn.innerHTML = '<span class="spinning">↻</span> Refresh';
+
+  const r = await fetch('/api/slurm/queue');
+  const d = await r.json();
+  const body = document.getElementById('queueBody');
+  btn.innerHTML = '↻ Refresh';
+
+  if (d.error) {
+    body.innerHTML = `<tr><td class="empty-row" colspan="9" style="color:var(--red)">${d.error}</td></tr>`;
+    return;
+  }
+
+  document.getElementById('badge').textContent = d.jobs.length ? `${d.jobs.length} jobs` : 'idle';
+
+  if (!d.jobs.length) {
+    body.innerHTML = '<tr><td class="empty-row" colspan="9">No jobs in queue</td></tr>';
+    return;
+  }
+
+  body.innerHTML = d.jobs.map(j => `
+    <tr>
+      <td style="color:var(--accent);font-weight:500">${j.id}</td>
+      <td>${j.name}</td>
+      <td><span class="tag ${stateClass(j.state)}">${j.state}</span></td>
+      <td>${j.time}</td>
+      <td>${j.time_limit}</td>
+      <td>${j.nodes}</td>
+      <td>${j.partition}</td>
+      <td style="color:var(--muted);font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${j.reason}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="cancelJob('${j.id}')">✕ cancel</button></td>
+    </tr>
+  `).join('');
+}
+
+async function cancelJob(id) {
+  if (!confirm(`Cancel job ${id}?`)) return;
+  const r = await fetch('/api/slurm/cancel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({job_id:id})
+  });
+  const d = await r.json();
+  if (d.error) alert(d.error);
+  else loadQueue();
+}
+
+async function submitJob() {
+  const path = document.getElementById('scriptPath').value.trim();
+  if (!path) return;
+  const r = await fetch('/api/slurm/submit', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({script_path:path})
+  });
+  const d = await r.json();
+  const log = document.getElementById('submitLog');
+  log.style.display = '';
+  const isErr = !!d.error && !d.output;
+  log.className = 'log' + (isErr ? ' err' : '');
+  log.textContent = d.output || d.error || 'Done.';
+  if (!isErr) setTimeout(loadQueue, 800);
+}
+
+async function runCmd() {
+  const cmd = document.getElementById('cmdInput').value.trim();
+  if (!cmd) return;
+  const r = await fetch('/api/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({command:cmd})
+  });
+  const d = await r.json();
+  const log = document.getElementById('cmdLog');
+  log.style.display = '';
+  const out = (d.stdout || '') + (d.stderr || '') || d.error || '(no output)';
+  const isErr = !d.stdout && (d.stderr || d.error);
+  log.className = 'log' + (isErr ? ' err' : '');
+  log.textContent = out;
+}
+
+// Auto-refresh every 15 seconds
+loadQueue();
+setInterval(loadQueue, 15000);
+</script>
+{% endblock %}

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SSH Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #080c14;
+  --surface: #0f1624;
+  --surface2: #151f30;
+  --border: #1e2d45;
+  --text: #cdd9e5;
+  --muted: #546070;
+  --accent: #38bdf8;
+  --green: #4ade80;
+  --red: #f87171;
+}
+body {
+  font-family: 'Fira Code', 'Courier New', monospace;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-image:
+    radial-gradient(ellipse at 20% 60%, rgba(56,189,248,0.05) 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 40%, rgba(56,189,248,0.04) 0%, transparent 55%);
+}
+.card {
+  width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 36px 32px 32px;
+}
+.logo { font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0.06em; }
+.logo-sub { font-size: 11px; color: var(--muted); margin-top: 5px; }
+.card-body { margin-top: 28px; }
+.form-row { display: flex; gap: 10px; margin-bottom: 14px; }
+.form-group { display: flex; flex-direction: column; flex: 1; }
+.form-group.port { flex: 0 0 90px; }
+label {
+  font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  margin-bottom: 5px;
+}
+input {
+  font-family: inherit;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 9px 11px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+input:focus { border-color: var(--accent); }
+input::placeholder { color: var(--muted); }
+.btn-login {
+  width: 100%;
+  padding: 10px;
+  background: var(--accent);
+  color: #080c14;
+  border: none;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 20px;
+  letter-spacing: 0.06em;
+  transition: opacity 0.15s;
+}
+.btn-login:hover { opacity: 0.85; }
+.error {
+  background: rgba(248,113,113,0.08);
+  border: 1px solid rgba(248,113,113,0.25);
+  border-radius: 4px;
+  color: var(--red);
+  font-size: 11px;
+  padding: 10px 12px;
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+.divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.hint { font-size: 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">⬡ SSH MANAGER</div>
+  <div class="logo-sub">cluster file manager &amp; terminal</div>
+
+  <div class="card-body">
+    {% if error %}
+    <div class="error">⚠ {{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Hostname / IP</label>
+          <input type="text" name="host" placeholder="cluster.univ.it" required autofocus>
+        </div>
+        <div class="form-group port">
+          <label>Port</label>
+          <input type="number" name="port" value="22">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" name="username" placeholder="mario.rossi" required>
+        </div>
+      </div>
+
+      <hr class="divider">
+      <div class="hint">Password or SSH key path (leave blank if using key agent)</div>
+      <br>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" name="password" placeholder="••••••••">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>SSH Key path (optional)</label>
+          <input type="text" name="keyfile" placeholder="~/.ssh/id_rsa">
+        </div>
+      </div>
+
+      <button type="submit" class="btn-login">CONNECT →</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>
