@@ -52,6 +52,45 @@ def get_sess():
     sid = session.get('sid')
     return ssh_sessions.get(sid) if sid else None
 
+# ── Local Mode Classes ───────────────────────────────────────────────────────
+class _Attr:
+    def __init__(self, f, m, s): self.filename, self.st_mode, self.st_size = f, m, s
+
+class LocalSFTP:
+    def listdir_attr(self, path):
+        res = []
+        for f in os.listdir(path):
+            if f.startswith('.'): continue
+            st = os.stat(os.path.join(path, f))
+            res.append(_Attr(f, st.st_mode, st.st_size))
+        return res
+    def open(self, path, mode):
+        # Paramiko lavora a livello di bytes. Forziamo la lettura/scrittura
+        # binaria anche in locale per evitare il charmap Windows.
+        if 'b' not in mode: mode += 'b'
+        return open(path, mode)
+    def mkdir(self, path): os.mkdir(path)
+    def rename(self, old, new): os.rename(old, new)
+    def close(self): pass
+
+class LocalStdout:
+    def __init__(self, data, rc=0):
+        self.data = data
+        self.channel = type('obj', (object,), {'recv_exit_status': lambda: rc})()
+    def read(self): return self.data
+
+class LocalClient:
+    def exec_command(self, cmd, timeout=None, cwd=None):
+        import subprocess
+        # Su Windows `shell=True` usa cmd.exe, passiamo cwd direttamente per
+        # evitare problemi con `cd /d` nei comandi concatenati.
+        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+        out, err = p.communicate(timeout=timeout)
+        return None, LocalStdout(out, p.returncode), LocalStdout(err, p.returncode)
+    def close(self): pass
+    def invoke_shell(self, term, width, height):
+        raise Exception("Terminal non pienamente supportato in modalità locale semplice.")
+
 # ═══════════════════════════════════════════════════════
 #  SHARED STYLES
 # ═══════════════════════════════════════════════════════
@@ -88,9 +127,10 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
 .tag-pending{background:rgba(251,191,36,.12);color:var(--yellow)}
 .tag-failed{background:rgba(248,113,113,.12);color:var(--red)}
 .tag-other{background:var(--surface2);color:var(--muted)}
-::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+::-webkit-scrollbar-thumb{background:var(--muted);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#6b7280}
 </style>
 """
 
@@ -121,7 +161,7 @@ body{display:flex;height:100vh;overflow:hidden}
 <aside class="sidebar">
   <div class="sidebar-logo">
     <div class="logo-name">⬡ SSH MANAGER</div>
-    <div class="logo-sub">cluster interface</div>
+    <div class="logo-sub">cluster & local interface</div>
     <div class="logo-ai">✦ Groq AI assistant</div>
     <div class="conn-info"><span class="conn-dot"></span>{{ username }}@{{ host }}</div>
   </div>
@@ -167,7 +207,8 @@ label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:
 .btn-login:hover{opacity:.85}
 .error{background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.25);border-radius:4px;
   color:var(--red);font-size:11px;padding:10px 12px;margin-bottom:18px;line-height:1.5}
-.divider{border:none;border-top:1px solid var(--border);margin:18px 0}
+.divider{border:none;border-top:1px solid var(--border);margin:18px 0;text-align:center;position:relative}
+.divider::after{content:'OR LOCAL';position:absolute;top:-7px;background:var(--surface);padding:0 8px;font-size:9px;color:var(--muted);left:50%;transform:translateX(-50%)}
 .hint{font-size:10px;color:var(--muted)}
 </style>
 <div class="card">
@@ -178,20 +219,23 @@ label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:
     {% if error %}<div class="error">⚠ {{ error }}</div>{% endif %}
     <form method="POST">
       <div class="form-row">
-        <div class="form-group"><label>Hostname / IP</label><input name="host" placeholder="cluster.univ.it" required autofocus></div>
+        <div class="form-group"><label>Hostname / IP</label><input name="host" placeholder="cluster.univ.it" autofocus></div>
         <div class="form-group port"><label>Port</label><input type="number" name="port" value="22"></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Username</label><input name="username" required></div>
+        <div class="form-group"><label>Username</label><input name="username"></div>
       </div>
-      <hr class="divider">
       <div class="form-row">
         <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="••••••••"></div>
       </div>
+      
+      <hr class="divider" style="margin:25px 0">
+      
       <div class="form-row">
-        <div class="form-group"><label>SSH Key path (optional)</label><input name="keyfile" placeholder="~/.ssh/id_rsa"></div>
+        <div class="form-group"><label>Local Path (Skip SSH)</label><input name="local_path" placeholder="C:\\Users\\me\\Documents\\Progetti"></div>
       </div>
-      <hr class="divider">
+      
+      <hr class="divider" style="margin:25px 0">
       <div class="hint">Groq API key (optional — can also set later in the editor)</div><br>
       <div class="form-row">
         <div class="form-group"><label>Groq API Key</label><input name="groq_key" placeholder="gsk_…" type="password"></div>
@@ -207,6 +251,9 @@ label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:
 # ═══════════════════════════════════════════════════════
 
 FILES_HTML = BASE_STYLE + SIDEBAR + """
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/foldgutter.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.css">
 <style>
 .page{display:flex;flex:1;overflow:hidden;height:100%}
 
@@ -229,6 +276,14 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
 
 /* Editor */
 .editor-panel{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.tabs-bar { display: flex; background: var(--bg); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
+.tab { padding: 6px 12px; font-size: 11px; color: var(--muted); border-right: 1px solid var(--border); cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none; background: var(--surface2); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tab.active { color: var(--text); background: var(--surface); border-bottom-color: var(--accent); }
+.tab:hover:not(.active) { background: var(--surface); color: var(--text); }
+.tab-close { color: var(--muted); cursor: pointer; border-radius: 50%; width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+.tab-close:hover { background: rgba(248,113,113,.2); color: var(--red); }
+.tab.dirty .tab-name::after { content: ' ●'; color: var(--yellow); font-size: 9px; }
+
 .editor-bar{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
 .editor-name{flex:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .editor-name.open{color:var(--text)}
@@ -239,6 +294,15 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
 .empty-hint .icon{font-size:36px;opacity:.25}
 .img-viewer{display:none;height:100%;align-items:center;justify-content:center;background:#050911;overflow:auto}
 .img-viewer img{max-width:100%;max-height:100%;object-fit:contain}
+
+/* Markdown Viewer */
+.md-viewer { display: none; padding: 20px 30px; color: #cdd9e5; overflow-y: auto; height: 100%; background: #080c14; font-family: sans-serif; line-height: 1.6; }
+.md-viewer h1, .md-viewer h2, .md-viewer h3 { border-bottom: 1px solid #1e2d45; padding-bottom: 8px; margin-top: 24px; margin-bottom: 16px; font-weight: 600; }
+.md-viewer pre { background: #0f1624; padding: 12px; border-radius: 6px; overflow-x: auto; border: 1px solid #1e2d45; margin-bottom: 16px; }
+.md-viewer code { background: rgba(56,189,248,.1); color: #7dd3fc; padding: 2px 4px; border-radius: 3px; font-family: 'Fira Code', monospace; font-size: 0.9em; }
+.md-viewer pre code { background: none; color: inherit; padding: 0; border-radius: 0; }
+.md-viewer p { margin-bottom: 16px; }
+.md-viewer ul, .md-viewer ol { margin-left: 20px; margin-bottom: 16px; }
 
 /* AI Panel */
 .ai-panel{width:var(--ai-w);flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);
@@ -276,10 +340,10 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
 .ctx-item:hover{background:var(--surface2)}
 .ctx-item.danger{color:var(--red)}
 
-/* CodeMirror */
+/* CodeMirror customizations */
 .CodeMirror{height:100%!important;font-family:'Fira Code','Courier New',monospace!important;font-size:13px!important;line-height:1.65!important;background:#060b12!important;color:#cdd9e5!important}
 .CodeMirror-scroll{height:100%!important}
-.CodeMirror-gutters{background:#0a1020!important;border-right:1px solid #1e2d45!important}
+.CodeMirror-gutters{background:#0a1020!important;border-right:1px solid #1e2d45!important;border-left:none!important}
 .CodeMirror-linenumber{color:#3d5068!important}
 .CodeMirror-cursor{border-left:1.5px solid #38bdf8!important}
 .CodeMirror-selected{background:rgba(56,189,248,.15)!important}
@@ -287,6 +351,17 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
 .cm-keyword{color:#c084fc!important}.cm-def{color:#7dd3fc!important}.cm-string{color:#86efac!important}
 .cm-number{color:#fbbf24!important}.cm-comment{color:#3d5068!important;font-style:italic}
 .cm-operator{color:#38bdf8!important}.cm-builtin{color:#f9a8d4!important}
+
+/* Code Folding & Brackets & Dialog UI */
+.CodeMirror-foldgutter { width: 14px; }
+.CodeMirror-foldgutter-open, .CodeMirror-foldgutter-folded { cursor: pointer; text-align: center; color: #546070; line-height: 1.65; }
+.CodeMirror-foldgutter-open:after { content: "▿"; font-size: 11px; }
+.CodeMirror-foldgutter-folded:after { content: "▹"; font-size: 11px; color: #38bdf8; }
+.CodeMirror-foldmarker { color: #38bdf8; text-shadow: none; font-family: inherit; background: rgba(56,189,248,.15); padding: 0 4px; border-radius: 3px; margin: 0 2px; cursor: pointer; }
+.CodeMirror-matchingbracket { color: #4ade80 !important; font-weight: bold; background: rgba(74,222,128,.15); border-radius: 2px; }
+.CodeMirror-dialog { background: var(--surface2)!important; color: var(--text)!important; padding: 6px 12px!important; }
+.CodeMirror-dialog input { background: var(--bg)!important; color: var(--text)!important; border: 1px solid var(--border)!important; outline: none; border-radius: 3px; padding: 3px 6px; margin: 0 6px; }
+.CodeMirror-dialog button { background: var(--surface)!important; color: var(--text)!important; border: 1px solid var(--border)!important; cursor: pointer; border-radius: 3px; padding: 3px 8px; }
 </style>
 
 <div class="page">
@@ -308,14 +383,18 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
 
   <!-- Editor -->
   <div class="editor-panel">
-    <div class="editor-bar">
+    <div class="tabs-bar" id="tabsBar"></div>
+    <div class="editor-bar" id="editorBar" style="display:none">
       <span class="editor-name" id="editorName">No file open</span>
       <span class="status-dot" id="statusDot">—</span>
-      <button class="btn btn-sm" onclick="saveFile()" id="saveBtn" style="display:none">Save Ctrl+S</button>
+      <span style="font-size:10px;color:var(--muted);margin-right:auto;padding-left:10px">Ctrl-F: Search | Ctrl-G: Go to line</span>
+      <button class="btn btn-sm" onclick="toggleMdPreview()" id="mdBtn" style="display:none">👁 Preview MD</button>
+      <button class="btn btn-sm btn-primary" onclick="saveFile()" id="saveBtn">Save Ctrl+S</button>
     </div>
     <div class="editor-wrap" id="editorWrap">
       <div class="empty-hint" id="emptyHint"><div class="icon">📂</div><div>Click a file to open it</div></div>
       <textarea id="cm" style="display:none"></textarea>
+      <div class="md-viewer" id="mdViewer"></div>
       <div class="img-viewer" id="imgViewer"><img id="imgEl" src="" alt=""></div>
     </div>
   </div>
@@ -340,7 +419,7 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
         </select>
       </div>
       <div class="ai-messages" id="aiMessages">
-        <div class="ai-msg system">✦ AI assistant ready. Open a file and use the actions below, or ask anything.</div>
+        <div class="ai-msg system">✦ AI assistant ready. Open a file and use the actions below, or ask anything. The AI automatically sees your currently opened file.</div>
       </div>
       <div class="ai-input-area">
         <div class="ai-actions">
@@ -367,28 +446,64 @@ FILES_HTML = BASE_STYLE + SIDEBAR + """
 </div>
 </main>
 
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/shell/shell.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+
+<!-- Addons for Brackets, Folding, Search, Go-to-line -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/foldcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/foldgutter.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/brace-fold.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/indent-fold.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/fold/comment-fold.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/search.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/jump-to-line.min.js"></script>
+
 <script>
 const HOME='{{ home }}';
 const IMG_EXTS=['png','jpg','jpeg','gif','bmp','webp','svg'];
-let cwd=HOME,openPath=null,openName=null,editor=null,selectedPath=null,aiCollapsed=false;
+let cwd=HOME, openPath=null, openName=null, editor=null, selectedPath=null, aiCollapsed=false;
 let chatHistory=[];
+let tabs = [];
+let mdPreviewOpen = false;
 
 // ── Editor init ──
 window.addEventListener('DOMContentLoaded',()=>{
   editor=CodeMirror.fromTextArea(document.getElementById('cm'),{
-    lineNumbers:true,autoCloseBrackets:true,styleActiveLine:true,
+    lineNumbers:true,
+    autoCloseBrackets:true,
+    matchBrackets:true,
+    styleActiveLine:true,
+    foldGutter:true,
+    gutters:["CodeMirror-linenumbers", "CodeMirror-foldgutter"],
     indentUnit:4,tabSize:4,indentWithTabs:false,
-    extraKeys:{'Ctrl-S':saveFile,'Cmd-S':saveFile},
+    extraKeys:{
+      'Ctrl-S':saveFile,'Cmd-S':saveFile,
+      'Ctrl-Q': function(cm){ cm.foldCode(cm.getCursor()); },
+    },
   });
   editor.getWrapperElement().style.cssText='height:100%;display:none';
-  editor.on('change',()=>{if(openPath)setDirty(true)});
+  editor.on('change',()=>{
+    if(openPath) {
+      const tab = tabs.find(t => t.path === openPath);
+      if(tab && !tab.isDirty) {
+        tab.isDirty = true;
+        setDirty(true);
+        renderTabs();
+      }
+      if(mdPreviewOpen && tab && tab.name.toLowerCase().endsWith('.md')) {
+        updateMdPreview();
+      }
+    }
+  });
   loadDir(cwd);
   document.getElementById('aiInput').addEventListener('keydown',e=>{
     if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendAI();}
@@ -429,23 +544,72 @@ function iconFor(n){const e=n.split('.').pop().toLowerCase();
   return{py:'🐍',sh:'📜',bash:'📜',js:'📜',json:'📋',md:'📝',txt:'📝',slurm:'⚙',sbatch:'⚙',
          yaml:'📋',yml:'📋',csv:'📊',ipynb:'📓',png:'🖼',jpg:'🖼',jpeg:'🖼',gif:'🖼',svg:'🖼'}[e]||'📄'}
 function modeFor(n){const e=n.split('.').pop().toLowerCase();
-  return{py:'python',sh:'shell',bash:'shell',slurm:'shell',sbatch:'shell',js:'javascript',json:'javascript'}[e]||null}
+  return{py:'python',sh:'shell',bash:'shell',slurm:'shell',sbatch:'shell',js:'javascript',json:'javascript',md:'markdown'}[e]||null}
 
-// ── Open/save ──
-function showEditor(){document.getElementById('emptyHint').style.display='none';document.getElementById('imgViewer').style.display='none';editor.getWrapperElement().style.display='';document.getElementById('saveBtn').style.display='';editor.refresh()}
-function showImage(){document.getElementById('emptyHint').style.display='none';editor.getWrapperElement().style.display='none';document.getElementById('imgViewer').style.display='flex';document.getElementById('saveBtn').style.display='none'}
-function showHint(){document.getElementById('emptyHint').style.display='';editor.getWrapperElement().style.display='none';document.getElementById('imgViewer').style.display='none';document.getElementById('saveBtn').style.display='none'}
+// ── Tabs System & Editor ──
+function showEditor(){document.getElementById('emptyHint').style.display='none';document.getElementById('imgViewer').style.display='none';document.getElementById('mdViewer').style.display='none';editor.getWrapperElement().style.display='';document.getElementById('saveBtn').style.display='';editor.refresh()}
+function showImage(){document.getElementById('emptyHint').style.display='none';editor.getWrapperElement().style.display='none';document.getElementById('mdViewer').style.display='none';document.getElementById('imgViewer').style.display='flex';document.getElementById('saveBtn').style.display='none'}
+function showHint(){document.getElementById('emptyHint').style.display='';editor.getWrapperElement().style.display='none';document.getElementById('mdViewer').style.display='none';document.getElementById('imgViewer').style.display='none';document.getElementById('saveBtn').style.display='none'}
 
 async function openFile(path,name){
+  if(tabs.find(t => t.path === path)) return switchTab(path);
+  
   const r=await fetch('/api/files/read?path='+encodeURIComponent(path));
   const d=await r.json();if(d.error)return alert(d.error);
-  openPath=path;openName=name;
-  document.getElementById('editorName').textContent=name;
-  document.getElementById('editorName').classList.add('open');
-  editor.setOption('mode',modeFor(name));
-  editor.setValue(d.content);editor.clearHistory();
-  showEditor();setDirty(false);
+  
+  const doc = CodeMirror.Doc(d.content, modeFor(name));
+  tabs.push({ path, name, doc, isDirty: false });
+  switchTab(path);
   addAIMsg('system',`📄 Opened: ${name}`);
+}
+
+function switchTab(path) {
+  const tab = tabs.find(t => t.path === path);
+  if(!tab) return;
+  openPath = tab.path; openName = tab.name;
+  editor.swapDoc(tab.doc);
+  document.getElementById('editorName').textContent = tab.name;
+  document.getElementById('editorName').classList.add('open');
+  document.getElementById('editorBar').style.display = 'flex';
+  
+  const isMd = tab.name.toLowerCase().endsWith('.md');
+  document.getElementById('mdBtn').style.display = isMd ? '' : 'none';
+  if (mdPreviewOpen && !isMd) toggleMdPreview();
+  else if (mdPreviewOpen) updateMdPreview();
+  else showEditor();
+  
+  setDirty(tab.isDirty);
+  renderTabs();
+}
+
+function renderTabs() {
+  const tb = document.getElementById('tabsBar');
+  tb.innerHTML = '';
+  if(tabs.length === 0) {
+    openPath = null; openName = null;
+    document.getElementById('editorBar').style.display = 'none';
+    showHint();
+    return;
+  }
+  tabs.forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'tab' + (t.path === openPath ? ' active' : '') + (t.isDirty ? ' dirty' : '');
+    d.innerHTML = `<span class="tab-name">${t.name}</span><span class="tab-close" title="Close">✕</span>`;
+    d.onclick = () => switchTab(t.path);
+    d.querySelector('.tab-close').onclick = (e) => closeTab(e, t.path);
+    tb.appendChild(d);
+  });
+}
+
+function closeTab(e, path) {
+  e.stopPropagation();
+  const tab = tabs.find(t => t.path === path);
+  if(tab && tab.isDirty && !confirm(`Il file "${tab.name}" ha modifiche non salvate. Chiuderlo comunque?`)) return;
+  tabs = tabs.filter(t => t.path !== path);
+  if(openPath === path) {
+    if(tabs.length > 0) switchTab(tabs[tabs.length-1].path);
+    else renderTabs(); // triggers empty hint
+  } else renderTabs();
 }
 
 async function openImage(path,name){
@@ -453,6 +617,7 @@ async function openImage(path,name){
   document.getElementById('editorName').textContent=name;
   document.getElementById('editorName').classList.add('open');
   document.getElementById('statusDot').textContent='🖼 image';
+  document.getElementById('mdBtn').style.display = 'none';
   const r=await fetch('/api/files/read_b64?path='+encodeURIComponent(path));
   const d=await r.json();if(d.error)return alert(d.error);
   document.getElementById('imgEl').src=`data:${d.mime};base64,${d.data}`;
@@ -464,7 +629,10 @@ async function saveFile(){
   const r=await fetch('/api/files/write',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({path:openPath,content:editor.getValue()})});
   const d=await r.json();if(d.error)return alert('Save failed: '+d.error);
+  const tab = tabs.find(t => t.path === openPath);
+  if(tab) tab.isDirty = false;
   setDirty(false);
+  renderTabs();
 }
 
 function setDirty(v){
@@ -473,17 +641,46 @@ function setDirty(v){
   dot.className='status-dot '+(v?'dirty':'clean');
 }
 
+// ── Markdown Preview ──
+function toggleMdPreview() {
+  mdPreviewOpen = !mdPreviewOpen;
+  const btn = document.getElementById('mdBtn');
+  if(mdPreviewOpen) {
+    btn.textContent = '✎ Edit MD';
+    updateMdPreview();
+    document.getElementById('mdViewer').style.display = 'block';
+    editor.getWrapperElement().style.display = 'none';
+  } else {
+    btn.textContent = '👁 Preview MD';
+    document.getElementById('mdViewer').style.display = 'none';
+    editor.getWrapperElement().style.display = '';
+    editor.refresh();
+  }
+}
+
+function updateMdPreview() {
+  document.getElementById('mdViewer').innerHTML = marked.parse(editor.getValue());
+}
+
+// ── Tree functions ──
 function refresh(){loadDir(cwd)}
 function goHome(){loadDir(HOME)}
-function goUp(){loadDir(cwd.replace(/\\/$/,'').split('/').slice(0,-1).join('/')||'/')}
+function goUp(){
+  // Puliamo gli slash in eccesso per evitare bug nella navigazione su path root di Windows (es. C:/)
+  let parent = cwd.replace(/\/+$/, '').split('/').slice(0,-1).join('/');
+  if (!parent) parent = '/'; // fallback generico
+  // se su windows finisce per svuotarsi e rimane "C:", aggiungiamo lo slash
+  if (parent.endsWith(':')) parent += '/'; 
+  loadDir(parent);
+}
 
 async function newFile(){const name=prompt('New file name:');if(!name)return;
-  const path=cwd.replace(/\\/$/,'')+'/'+name;
+  const path=cwd.replace(/\/+$/, '')+'/'+name;
   const r=await fetch('/api/files/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
   const d=await r.json();if(d.error)return alert(d.error);refresh()}
 
 async function newFolder(){const name=prompt('New folder name:');if(!name)return;
-  const path=cwd.replace(/\\/$/,'')+'/'+name;
+  const path=cwd.replace(/\/+$/, '')+'/'+name;
   const r=await fetch('/api/files/mkdir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})});
   const d=await r.json();if(d.error)return alert(d.error);refresh()}
 
@@ -493,7 +690,11 @@ async function deleteSelected(){
   if(!confirm(`Delete "${name}"?`))return;
   const r=await fetch('/api/files/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:selectedPath})});
   const d=await r.json();if(d.error)return alert(d.error);
-  if(selectedPath===openPath){openPath=null;showHint();}
+  
+  // Close tab if it was deleted
+  const t = tabs.find(tab => tab.path === selectedPath);
+  if(t) closeTab({stopPropagation:()=>{}}, selectedPath);
+  
   selectedPath=null;refresh();
 }
 
@@ -502,7 +703,11 @@ let ctxPath,ctxIsDir,ctxName;
 function showCtx(x,y,path,isDir,name){ctxPath=path;ctxIsDir=isDir;ctxName=name;const m=document.getElementById('ctxMenu');document.getElementById('ctxOpen').textContent=isDir?'Open folder':'Open file';m.style.cssText=`display:block;left:${x}px;top:${y}px`}
 document.getElementById('ctxOpen').onclick=()=>{if(ctxIsDir)loadDir(ctxPath);else if(isImage(ctxName))openImage(ctxPath,ctxName);else openFile(ctxPath,ctxName);hideCtx()}
 document.getElementById('ctxRename').onclick=async()=>{const n=prompt('Rename to:',ctxName);if(!n||n===ctxName)return hideCtx();const dir=ctxPath.split('/').slice(0,-1).join('/');const r=await fetch('/api/files/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_path:ctxPath,new_path:dir+'/'+n})});const d=await r.json();if(d.error)alert(d.error);else{if(ctxPath===openPath){openPath=dir+'/'+n;document.getElementById('editorName').textContent=n;}refresh();}hideCtx()}
-document.getElementById('ctxDelete').onclick=async()=>{if(!confirm(`Delete "${ctxName}"?`))return hideCtx();const r=await fetch('/api/files/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ctxPath})});const d=await r.json();if(d.error)alert(d.error);else{if(ctxPath===openPath){openPath=null;showHint();}refresh();}hideCtx()}
+document.getElementById('ctxDelete').onclick=async()=>{if(!confirm(`Delete "${ctxName}"?`))return hideCtx();const r=await fetch('/api/files/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:ctxPath})});const d=await r.json();if(d.error)alert(d.error);else{
+  const t = tabs.find(tab => tab.path === ctxPath);
+  if(t) closeTab({stopPropagation:()=>{}}, ctxPath);
+  refresh();}hideCtx()
+}
 function hideCtx(){document.getElementById('ctxMenu').style.display='none'}
 document.addEventListener('click',hideCtx);
 document.addEventListener('keydown',e=>{if(e.key==='Escape')hideCtx()});
@@ -547,7 +752,7 @@ function aiAction(action){
   };
   const sel=editor&&editor.getSelection();
   const code=action==='selection'?(sel||editor.getValue()):editor.getValue();
-  const prompt=`File: ${openName||'unknown'}\n\n\`\`\`\n${code.slice(0,6000)}\n\`\`\`\n\n${prompts[action]}`;
+  const prompt=`Regarding the file \`${openName||'unknown'}\`:\n\n\`\`\`\n${code.slice(0,6000)}\n\`\`\`\n\n${prompts[action]}`;
   document.getElementById('aiInput').value=prompt;
 }
 
@@ -567,12 +772,21 @@ async function sendAI(){
   const typingDiv=addAIMsg('assistant','');
   typingDiv.innerHTML='<span class="typing-dot">●</span><span class="typing-dot">●</span><span class="typing-dot">●</span>';
 
+  // INJECT CURRENT FILE CONTEXT SEAMLESSLY
+  let msgsToSend = [...chatHistory];
+  if (openPath && editor) {
+      msgsToSend.unshift({
+          role: 'system',
+          content: `[System Context: The user currently has the file "${openName}" open in their editor. Here is the current content of this file (up to 10k chars):\n\n\`\`\`\n${editor.getValue().slice(0, 10000)}\n\`\`\`\n\nUse this context automatically if the user refers to "this file", asks for a fix, explanation, or optimization without pasting the code.]`
+      });
+  }
+
   try{
     const r=await fetch('/api/ai/chat',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        messages:chatHistory,
+        messages:msgsToSend,
         model:document.getElementById('aiModel').value,
         key,
       })
@@ -713,30 +927,56 @@ def index():
 def login():
     error = None
     if request.method == 'POST':
-        host     = request.form.get('host', '').strip()
-        port     = int(request.form.get('port') or 22)
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '')
-        keyfile  = request.form.get('keyfile', '').strip()
-        groq_key = request.form.get('groq_key', '').strip()
-        try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            kw = dict(hostname=host, port=port, username=username, timeout=10)
-            if keyfile:    kw['key_filename'] = keyfile
-            elif password: kw['password'] = password
-            client.connect(**kw)
-            sftp = client.open_sftp()
-            _, stdout, _ = client.exec_command('echo $HOME')
-            home = stdout.read().decode().strip() or f'/home/{username}'
-            sid = str(uuid.uuid4())
-            ssh_sessions[sid] = dict(client=client, sftp=sftp, host=host, port=port,
-                                     username=username, home=home,
-                                     groq_key=groq_key or os.environ.get('GROQ_API_KEY', ''))
-            session['sid'] = sid
-            return redirect(url_for('files'))
-        except Exception as e:
-            error = str(e)
+        host       = request.form.get('host', '').strip()
+        port       = int(request.form.get('port') or 22)
+        username   = request.form.get('username', '').strip()
+        password   = request.form.get('password', '')
+        keyfile    = request.form.get('keyfile', '').strip()
+        groq_key   = request.form.get('groq_key', '').strip()
+        local_path = request.form.get('local_path', '').strip()
+
+        if local_path:
+            if not os.path.exists(local_path):
+                error = "Il path locale specificato non esiste."
+            else:
+                sid = str(uuid.uuid4())
+
+                # Gestione sicura del login name, specialmente su servizi/background process Windows
+                try:
+                    uname = os.getlogin()
+                except Exception:
+                    uname = 'local_user'
+
+                # Normalizziamo il path in stile POSIX per evitare bug sul frontend
+                normalized_home = os.path.abspath(local_path).replace('\\', '/')
+
+                ssh_sessions[sid] = dict(client=LocalClient(), sftp=LocalSFTP(), host="localhost", port=0,
+                                         username=uname,
+                                         home=normalized_home,
+                                         groq_key=groq_key or os.environ.get('GROQ_API_KEY', ''),
+                                         is_local=True)
+                session['sid'] = sid
+                return redirect(url_for('files'))
+        else:
+            try:
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                kw = dict(hostname=host, port=port, username=username, timeout=10)
+                if keyfile:    kw['key_filename'] = keyfile
+                elif password: kw['password'] = password
+                client.connect(**kw)
+                sftp = client.open_sftp()
+                _, stdout, _ = client.exec_command('echo $HOME')
+                home = stdout.read().decode().strip() or f'/home/{username}'
+                sid = str(uuid.uuid4())
+                ssh_sessions[sid] = dict(client=client, sftp=sftp, host=host, port=port,
+                                         username=username, home=home,
+                                         groq_key=groq_key or os.environ.get('GROQ_API_KEY', ''),
+                                         is_local=False)
+                session['sid'] = sid
+                return redirect(url_for('files'))
+            except Exception as e:
+                error = str(e)
     return render_template_string(LOGIN_HTML, error=error)
 
 @app.route('/disconnect')
@@ -840,8 +1080,14 @@ def api_delete():
     d = get_sess()
     if not d: return jsonify({'error': 'Not connected'}), 401
     try:
-        _, stdout, _ = d['client'].exec_command(f'rm -rf -- "{request.json["path"]}"')
-        stdout.channel.recv_exit_status()
+        if d.get('is_local'):
+            import shutil
+            p = request.json["path"]
+            if os.path.isdir(p): shutil.rmtree(p)
+            else: os.remove(p)
+        else:
+            _, stdout, _ = d['client'].exec_command(f'rm -rf -- "{request.json["path"]}"')
+            stdout.channel.recv_exit_status()
         return jsonify({'success': True})
     except Exception as e: return jsonify({'error': str(e)}), 500
 
@@ -859,9 +1105,17 @@ def api_run():
     if not d: return jsonify({'error': 'Not connected'}), 401
     body = request.json
     cmd = body.get('command', '')
-    if body.get('cwd'): cmd = f'cd "{body["cwd"]}" && {cmd}'
+
+    kwargs = dict(timeout=30)
+
+    if body.get('cwd'):
+        if d.get('is_local'):
+            kwargs['cwd'] = body['cwd']
+        else:
+            cmd = f'cd "{body["cwd"]}" && {cmd}'
+
     try:
-        _, stdout, stderr = d['client'].exec_command(cmd, timeout=30)
+        _, stdout, stderr = d['client'].exec_command(cmd, **kwargs)
         return jsonify({'stdout': stdout.read().decode('utf-8', errors='replace'),
                         'stderr': stderr.read().decode('utf-8', errors='replace'),
                         'rc': stdout.channel.recv_exit_status()})
@@ -946,6 +1200,14 @@ def api_ai_chat():
 def ws_terminal(ws):
     d = get_sess()
     if not d: return
+
+    if d.get('is_local'):
+        ws.send("\r\n\x1b[31m● Terminale Web interattivo completo non disponibile in modalità Locale (Pseudo-PTY mancante).\n")
+        ws.send("  Tuttavia, puoi testare comandi limitati se l'host lo supporta.\x1b[0m\r\n")
+        # In locale vero e proprio, ci vorrebbe pty/winpty, qua saltiamo per evitare hang.
+        ws.close()
+        return
+
     channel = d['client'].invoke_shell(term='xterm-256color', width=220, height=50)
     channel.settimeout(0.1)
     stop = threading.Event()
@@ -968,7 +1230,6 @@ def ws_terminal(ws):
             channel.send(msg.encode() if isinstance(msg, str) else msg)
     except: pass
     finally:
-
         stop.set()
         try: channel.close()
         except: pass

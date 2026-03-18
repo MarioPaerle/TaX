@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$SCRIPT_DIR/.venv"
 
 echo ""
-echo "  ⬡ SSH Manager setup"
+echo "  ⬡ TaX setup"
 echo "  ─────────────────────────────"
 
 # Create venv if missing
