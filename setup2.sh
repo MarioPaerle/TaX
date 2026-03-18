@@ -15,6 +15,7 @@ if [ ! -d "$VENV" ]; then
     python3 -m venv "$VENV"
 fi
 
+
 # Activate
 source "$VENV/bin/activate"
 

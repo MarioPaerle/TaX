@@ -968,6 +968,7 @@ def ws_terminal(ws):
             channel.send(msg.encode() if isinstance(msg, str) else msg)
     except: pass
     finally:
+
         stop.set()
         try: channel.close()
         except: pass
