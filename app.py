@@ -5,7 +5,7 @@ Run: python app.py   (installs dependencies automatically on first run)
 
 # ── Auto-installer ────────────────────────────────────────────────────────────
 def _bootstrap():
-    import importlib, subprocess, sys, os, urllib.request, tempfile
+    import importlib.util, subprocess, sys, os, urllib.request, tempfile
 
     REQUIRED = ['flask', 'flask_sock', 'paramiko']
     missing  = [pkg for pkg in REQUIRED if importlib.util.find_spec(pkg) is None]
